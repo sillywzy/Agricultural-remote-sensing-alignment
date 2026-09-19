@@ -1,0 +1,24 @@
+# ===== 大数据 / 二进制（禁止提交，均为可重新下载的产物）=====
+work/venv/
+work/baselines/
+work/datasets/
+work/wheels/
+work/wheels2/
+work/wheels3/
+work/wheels-gpu/
+work/emb_cache/
+work/emb_cache_gpu/
+work/*.zip
+work/*.log
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
