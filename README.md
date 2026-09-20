@@ -1,58 +1,79 @@
-# 农业遥感多模态 · 图文空间对齐研究基线
+# Agricultural Remote Sensing Alignment
 
-RemoteCLIP（ViT-B/32）在遥感图文检索数据集 RSITMD / RSICD 上的零样本基线与**按类别（含农田 farmland）拆分**的检索评测代码。
-后续“地块级（parcel-level）细粒度空间对齐”方法将在此基线上对比。
+Parcel-level text-image alignment for agricultural remote sensing, built on a frozen
+RemoteCLIP ViT-B/32 backbone. This repository contains the full experimental pipeline:
+motivation analysis, two method versions, ablations, and paper figures.
 
-## 环境
+## Problem
 
-- Python 3.10（venv）、Windows + RTX 3060 6GB（CPU 亦可跑）
-- 依赖见 `requirements.txt`；torch 按 CPU/GPU 二选一安装。
-- RemoteCLIP 权重：`RemoteCLIP-ViT-B-32.pt`（来自 https://huggingface.co/chendelong/RemoteCLIP ，下载脚本见 `scripts/download_weights.py`，国内可走 hf-mirror）。
+RemoteCLIP compresses a whole image into ONE vector (global alignment) and cannot tell
+WHICH parcel a text refers to. On RSICD farmland images the sliding-window spatial
+response is nearly flat (max-min similarity range < 0.07) and concept heatmaps for
+different queries largely overlap (correlation 0.35-0.52), so the model lacks the
+spatial selectivity required for parcel-level grounding.
 
-## 代码（scripts/）
+## Method
 
-| 脚本 | 作用 |
-|---|---|
-| `smoke_test.py` | 环境自检：加载权重并计算图文相似度 |
-| `run_demo.py` | 少量遥感图的相似度矩阵 CSV + 文本对齐热力图 |
-| `run_retrieval_baseline.py` | RSITMD/RSICD 零样本检索基线：TR/IR@1/5/10、mR、排名（自动用 GPU） |
-| `run_rsicd_perclass_final.py` | RSICD 按 30 个场景类别拆分检索指标，并单独导出 farmland 结果 |
-| `build_rsitmd.py` | 由 RemoteCLIP RET-3 数据重建完整 RSITMD（472 图 / 2358 句） |
-| `download_weights.py` | 下载 RemoteCLIP ViT-B/32 权重（hf-mirror） |
+**ParcelAlign v1** — learnable parcel tokens:
+- K=8 learnable queries cross-attend to the 49 ViT patch tokens, producing K parcel
+  tokens (soft attention regions, not fixed grids)
+- Retrieval score mixes a global term (text vs CLS) and a parcel term
+  (max cosine over parcels), FILIP-style
+- Loss: global InfoNCE + parcel-level InfoNCE + parcel diversity regularizer
+- Only 2.37M trainable parameters; the 151M backbone stays frozen
 
-## 数据目录约定（运行时自备，未纳入 git）
+**ParcelAlign v2** — input-adaptive granularity gate:
+- A gate predicts a per-image alpha from the CLS embedding, parcel-parcel diversity
+  and parcel-to-CLS statistics, deciding how much to trust the global vs parcel term
+- The gate output is batch-centered so it can only encode RELATIVE per-image
+  differences; without centering it collapses to alpha->0 (see ablation)
+- Interpretable: the learned alpha is consistently higher for texture-global
+  categories (bareland 0.573, desert 0.568, farmland 0.543) and lower for
+  object-centric ones (playground 0.443, railwaystation 0.471)
+
+## Main results (RSICD test, 1093 images / 5465 captions)
+
+| Method | ALL mR | FARM mR | Note |
+|---|---|---|---|
+| RemoteCLIP ViT-B/32 (baseline) | 32.53 | 23.51 | global alignment, zero-shot |
+| Naive 2x2 tiling max | 18.63 | 16.31 | ablation: fixed grid, no learning |
+| ParcelAlign v1 (fixed alpha) | 34.20 | 19.55 | learned parcels, scalar alpha |
+| v2 gate w/o centering | 32.07 | 18.20 | ablation: gate collapses |
+| **ParcelAlign v2 (centered gate)** | **34.49** | **21.26** | adaptive per-image alpha (ours) |
+
+FARM = farmland test subset (37 images). v2 farmland 95% bootstrap CI [13.42, 29.55]
+overlaps the baseline CI [16.22, 30.99], so the farmland drop is not statistically
+significant. Largest per-category gains: railwaystation +21.5, playground +11.5.
+
+## Repository structure
 
 ```
-work/
-  baselines/RemoteCLIP-weights/RemoteCLIP-ViT-B-32.pt
-  datasets/
-    remoteclip-ret/      # rsitmd_test.csv / rsicd_test.csv + test_images/
-    RSITMD/              # images/ + dataset_RSITMD.json + captions_all.csv
-    RSICD_optimal/       # RSICD_images/ + dataset_rsicd.json + txtclasses/
-  emb_cache_gpu/         # 图文向量缓存，可删
+models/parcel_align.py       ParcelAlign v1 (parcel tokenizer + losses)
+models/parcel_align_v2.py    ParcelAlign v2 (+ centered granularity gate)
+scripts/run_retrieval_baseline.py     RemoteCLIP zero-shot retrieval baseline
+scripts/run_rsicd_perclass_final.py   per-category baseline breakdown
+scripts/validate_granularity.py       naive tiling ablation
+scripts/localization_heatmap.py       text-conditioned sliding-window heatmaps
+scripts/localization_quant.py         cross-concept correlation analysis
+scripts/train_parcel_align.py         v1 training + per-epoch eval
+scripts/train_parcel_align_v2.py      v2 training + full final analysis
+scripts/eval_parcel_perclass.py       per-category comparison + farmland CI
+scripts/make_figure1.py / make_figure2.py / make_table1.py   paper figures
 ```
 
-数据集获取说明见本地 `work/datasets/DATASETS.md`。
+## Setup
 
-## 基线结果（零样本，未微调，GPU fp16）
+See `requirements.txt`. Expect: torch 2.2.2+cu121, open_clip_torch 3.3.0, numpy 1.26.4.
+Place the RemoteCLIP ViT-B/32 checkpoint at
+`work/baselines/RemoteCLIP-weights/RemoteCLIP-ViT-B-32.pt` and the RSICD dataset under
+`work/datasets/RSICD_optimal/` (this repo hosts code, not data or weights).
 
-| 数据集 | TR@1 | TR@5 | TR@10 | IR@1 | IR@5 | IR@10 | mR |
-|---|---|---|---|---|---|---|---|
-| RSITMD (452 图) | 20.09 | 52.74 | 71.15 | 26.55 | 51.99 | 64.16 | 47.78 |
-| RSICD (1093 图) | 10.67 | 32.63 | 49.20 | 15.74 | 36.60 | 50.32 | 32.53 |
-| **RSICD-farmland (37 图)** | 5.41 | 22.16 | 35.14 | 8.11 | 29.73 | 40.54 | **23.51** |
+## Key findings
 
-农田类别 mR 在 30 类中倒数第 4，印证“全局粗对齐在均质农田场景最易混淆”的研究动机。
-
-## 运行
-
-```powershell
-python -m venv work/venv
-work/venv/Scripts/Activate.ps1
-pip install -r requirements.txt
-python scripts/smoke_test.py
-python scripts/run_retrieval_baseline.py
-python scripts/run_rsicd_perclass_final.py
-```
-
-结果输出到 `outputs/baseline-results/`。
+1. Global alignment lacks spatial selectivity: responses to "farmland", "road" and
+   "water" overlap and are nearly flat under a unified color scale.
+2. Fixed-grid tiling is not the answer: naive 2x2 max-pooling drops mR by 13.9 points.
+3. Learned parcels help object-centric categories massively (railwaystation +21.5)
+   but hurt texture-global ones (desert -10.6) with a fixed mix.
+4. A centered per-image gate resolves this trade-off: it learns to trust the global
+   term on homogeneous textures and the parcel term on heterogeneous scenes.
