@@ -20,9 +20,13 @@ from models.parcel_align import ParcelTokenizer
 class GranularityGate(nn.Module):
     """Per-image alpha in (0,1): weight of the global term vs the parcel term."""
 
-    def __init__(self, joint_dim=512, k=8, hidden=128):
+    def __init__(self, joint_dim=512, k=8, hidden=128, scale_init=None):
         super().__init__()
         self.k = k
+        if scale_init is not None:
+            self.scale = nn.Parameter(torch.tensor(float(scale_init)))
+        else:
+            self.register_parameter("scale", None)
         # input: cls (512) + sim_pc stats (3) + sim_pc (k) + parcel diversity (1)
         self.mlp = nn.Sequential(
             nn.Linear(joint_dim + 3 + k + 1, hidden),
@@ -39,13 +43,15 @@ class GranularityGate(nn.Module):
         x = torch.cat([cls_n, stats, sim_pc, div], dim=-1)
         raw = self.mlp(x).squeeze(-1)                                # (B,)
         raw = raw - raw.mean()                # centering: gate encodes only RELATIVE per-image differences,
+        if self.scale is not None:            # v2.1: learnable amplification widens the alpha range
+            raw = self.scale * raw
         return torch.sigmoid(raw)             # so it cannot globally collapse alpha (batch mean pinned at 0.5)
 
 
 class ParcelAlignV2(nn.Module):
     """Frozen RemoteCLIP + parcel tokenizer + input-adaptive granularity gate."""
 
-    def __init__(self, clip_model, k=8, heads=8, init_t=0.07, div_weight=0.05):
+    def __init__(self, clip_model, k=8, heads=8, init_t=0.07, div_weight=0.05, scale_init=None):
         super().__init__()
         self.clip = clip_model
         for p in self.clip.parameters():
@@ -54,7 +60,7 @@ class ParcelAlignV2(nn.Module):
         self.dim = vis.proj.shape[0]
         self.joint = vis.proj.shape[1]
         self.tokenizer = ParcelTokenizer(self.dim, k, heads)
-        self.gate = GranularityGate(self.joint, k)
+        self.gate = GranularityGate(self.joint, k, scale_init=scale_init)
         self.k = k
         self.div_weight = div_weight
         self.logit_g = nn.Parameter(torch.log(torch.tensor(1.0 / init_t)))

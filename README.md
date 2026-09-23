@@ -39,9 +39,13 @@ spatial selectivity required for parcel-level grounding.
 | Naive 2x2 tiling max | 18.63 | 16.31 | ablation: fixed grid, no learning |
 | ParcelAlign v1 (fixed alpha) | 34.20 | 19.55 | learned parcels, scalar alpha |
 | v2 gate w/o centering | 32.07 | 18.20 | ablation: gate collapses |
-| **ParcelAlign v2 (centered gate)** | **34.49** | **21.26** | adaptive per-image alpha (ours) |
+| ParcelAlign v2 (centered learned gate) | 34.49 | 21.26 | adaptive per-image alpha (~0.5) |
+| v2.1 farmland boost x4 | 34.50 | 22.70 | class-balanced sampling (ablation) |
+| **v2 + val-selected alpha (main)** | **35.36** | **23.15** | alpha=0.80 chosen on val, reported on test |
 
-FARM = farmland test subset (37 images). v2 farmland 95% bootstrap CI [13.42, 29.55]
+FARM = farmland test subset (37 images). The main result's alpha is selected on the 1094-image validation split without touching test. FARM 95% bootstrap CI at alpha=0.80: [14.77, 32.07], overlapping the baseline CI [16.22, 30.99] -> farmland is statistically tied with baseline. Farmland oracle alpha on val is 1.00: homogeneous farmland scenes on RSICD are inherently global. Oracle per-category alpha ceiling (analysis only): ALL 37.15 / FARM 24.14.
+
+(v2 learned-gate FARM CI [13.42, 29.55]
 overlaps the baseline CI [16.22, 30.99], so the farmland drop is not statistically
 significant. Largest per-category gains: railwaystation +21.5, playground +11.5.
 
@@ -57,6 +61,9 @@ scripts/localization_heatmap.py       text-conditioned sliding-window heatmaps
 scripts/localization_quant.py         cross-concept correlation analysis
 scripts/train_parcel_align.py         v1 training + per-epoch eval
 scripts/train_parcel_align_v2.py      v2 training + full final analysis
+scripts/train_parcel_align_v21.py     v2.1 farmland-boosted training (ablation)
+scripts/alpha_sweep.py               fixed-alpha trade-off sweep + oracle ceiling
+scripts/val_alpha_select.py          leakage-free alpha selection on val -> test report
 scripts/eval_parcel_perclass.py       per-category comparison + farmland CI
 scripts/make_figure1.py / make_figure2.py / make_table1.py   paper figures
 ```
@@ -77,3 +84,5 @@ Place the RemoteCLIP ViT-B/32 checkpoint at
    but hurt texture-global ones (desert -10.6) with a fixed mix.
 4. A centered per-image gate resolves this trade-off: it learns to trust the global
    term on homogeneous textures and the parcel term on heterogeneous scenes.
+
+
